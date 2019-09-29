@@ -281,46 +281,11 @@ def export(local_root, commit, target):
     :param str commit: Git commit SHA to export.
     :param str target: Directory to export to.
     """
-    log = logging.getLogger(__name__)
     target = os.path.realpath(target)
-    mtimes = list()
-
-    # Define extract function.
-    def extract(stdout):
-        """Extract tar archive from "git archive" stdout.
-
-        :param file stdout: Handle to git's stdout pipe.
-        """
-        queued_links = list()
-        try:
-            with tarfile.open(fileobj=stdout, mode='r|') as tar:
-                for info in tar:
-                    log.debug('name: %s; mode: %d; size: %s; type: %s', info.name, info.mode, info.size, info.type)
-                    path = os.path.realpath(os.path.join(target, info.name))
-                    if not path.startswith(target):  # Handle bad paths.
-                        log.warning('Ignoring tar object path %s outside of target directory.', info.name)
-                    elif info.isdir():  # Handle directories.
-                        if not os.path.exists(path):
-                            os.makedirs(path, mode=info.mode)
-                    elif info.issym() or info.islnk():  # Queue links.
-                        queued_links.append(info)
-                    else:  # Handle files.
-                        tar.extract(member=info, path=target)
-                        if os.path.splitext(info.name)[1].lower() == '.rst':
-                            mtimes.append(info.name)
-                for info in queued_links:
-                    # There used to be a check for broken symlinks here, but it was buggy
-                    tar.extract(member=info, path=target)
-        except tarfile.TarError as exc:
-            log.debug('Failed to extract output from "git archive" command: %s', str(exc))
 
     # Run command.
-    run_command(local_root, ['git', 'archive', '--format=tar', commit], pipeto=extract)
-
-    # Set mtime.
-    for file_path in mtimes:
-        last_committed = int(run_command(local_root, ['git', 'log', '-n1', '--format=%at', commit, '--', file_path]))
-        os.utime(os.path.join(target, file_path), (last_committed, last_committed))
+    run_command(local_root, ['git', 'clone', '--local', '--no-hardlinks', '--no-checkout', '--', local_root, target])
+    run_command(target, ['git', 'checkout', commit])
 
 
 def clone(local_root, new_root, remote, branch, rel_dest, exclude):
