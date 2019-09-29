@@ -4,6 +4,7 @@ import datetime
 import logging
 import multiprocessing
 import os
+import subprocess
 import sys
 
 from sphinx import application, locale
@@ -201,6 +202,19 @@ def _build(argv, config, versions, remote, is_root):
         argv += ('-N',)
     if config.overflow:
         argv += config.overflow
+
+    # Install the project before building.
+    # This works because _build runs in a subprocess
+    # (which is not affected by other subprocesses or their imports);
+    # however, the package at pkg_path MUST NOT be imported yet
+    # (because the already-loaded module will be used instead).
+    rel_path = remote['conf_rel_path']
+    while not argv[0].endswith(rel_path):
+        assert rel_path != '/'
+        rel_path = os.path.dirname(rel_path)
+    assert argv[0].endswith(rel_path), (argv[0], rel_path)
+    pkg_path = argv[0][:-len(rel_path)]
+    subprocess.run([sys.executable, '-m', 'pip', 'install', pkg_path], check=True)
 
     # Build.
     result = build_main(argv)
