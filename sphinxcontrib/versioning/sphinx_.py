@@ -6,6 +6,8 @@ import multiprocessing
 import os
 import subprocess
 import sys
+import tempfile
+import venv
 
 from sphinx import application, locale
 from sphinx.cmd.build import build_main
@@ -203,23 +205,51 @@ def _build(argv, config, versions, remote, is_root):
     if config.overflow:
         argv += config.overflow
 
-    # Install the project before building.
-    # This works because _build runs in a subprocess
-    # (which is not affected by other subprocesses or their imports);
-    # however, the package at pkg_path MUST NOT be imported yet
-    # (because the already-loaded module will be used instead).
-    rel_path = remote['conf_rel_path']
-    while not argv[0].endswith(rel_path):
-        assert rel_path != '/'
-        rel_path = os.path.dirname(rel_path)
-    assert argv[0].endswith(rel_path), (argv[0], rel_path)
-    pkg_path = argv[0][:-len(rel_path)]
-    subprocess.run([sys.executable, '-m', 'pip', 'install', pkg_path], check=True)
+    log = logging.getLogger(__name__)
+    with tempfile.NamedTemporaryFile(delete=False) as requirements:
+        log.info('Freezing requirements to %s', requirements.name)
+        requirements.write(
+            subprocess.check_output([sys.executable, '-m', 'pip', 'freeze']),
+        )
 
-    # Build.
-    result = build_main(argv)
-    if result != 0:
-        raise SphinxError
+    with TempDir() as temp_dir:
+        log.info('Creating a venv at %s...', temp_dir)
+        try:
+            venv.EnvBuilder(with_pip=True).create(temp_dir)
+            #subprocess.check_output([sys.executable, '-m', 'venv', temp_dir])
+        except subprocess.CalledProcessError as exc:
+            raise Exception(exc.stdout)
+
+        venv_python = os.path.join(temp_dir, 'bin', 'python')
+
+        log.info('Installing the frozen requirements...')
+        subprocess.run(
+            [venv_python, '-m', 'pip', 'install', '-r', requirements.name],
+            check=True,
+        )
+
+        # Install the project before building.
+        # This works because _build runs in a subprocess
+        # (which is not affected by other subprocesses or their imports);
+        # however, the package at pkg_path MUST NOT be imported yet
+        # (because the already-loaded module will be used instead).
+        rel_path = remote['conf_rel_path']
+        while not argv[0].endswith(rel_path):
+            assert rel_path != '/'
+            rel_path = os.path.dirname(rel_path)
+        assert argv[0].endswith(rel_path), (argv[0], rel_path)
+        pkg_path = argv[0][:-len(rel_path)]
+        log.info('Installing the package from %s...', pkg_path)
+        subprocess.run(
+            [venv_python, '-m', 'pip', 'install', pkg_path],
+            check=True,
+        )
+
+        # Build.
+        try:
+            subprocess.run([venv_python, '-m', 'sphinx', *argv], check=True)
+        except subprocess.CalledProcessError:
+            raise SphinxError
 
 
 def _read_config(argv, config, remote, queue):
