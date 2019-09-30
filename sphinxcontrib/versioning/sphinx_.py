@@ -173,13 +173,13 @@ class ConfigInject(SphinxConfig):
         self.extensions.append('sphinxcontrib.versioning.sphinx_')
 
 
-def _build(argv, config, versions, current_name, is_root):
+def _build(argv, config, versions, remote, is_root):
     """Build Sphinx docs via multiprocessing for isolation.
 
     :param tuple argv: Arguments to pass to Sphinx.
     :param sphinxcontrib.versioning.lib.Config config: Runtime configuration.
     :param sphinxcontrib.versioning.versions.Versions versions: Versions class instance.
-    :param str current_name: The ref name of the current version being built.
+    :param dict remote: The remote of the current version being built.
     :param bool is_root: Is this build in the web root?
     """
     # Patch.
@@ -189,7 +189,7 @@ def _build(argv, config, versions, current_name, is_root):
         EventHandlers.BANNER_MAIN_VERSION = config.banner_main_ref
         EventHandlers.BANNER_RECENT_TAG = config.banner_recent_tag
         EventHandlers.SHOW_BANNER = True
-    EventHandlers.CURRENT_VERSION = current_name
+    EventHandlers.CURRENT_VERSION = remote['name']
     EventHandlers.IS_ROOT = is_root
     EventHandlers.VERSIONS = versions
     SC_VERSIONING_VERSIONS[:] = [p for r in versions.remotes for p in sorted(r.items()) if p[0] not in ('sha', 'date')]
@@ -208,22 +208,22 @@ def _build(argv, config, versions, current_name, is_root):
         raise SphinxError
 
 
-def _read_config(argv, config, current_name, queue):
+def _read_config(argv, config, remote, queue):
     """Read the Sphinx config via multiprocessing for isolation.
 
     :param tuple argv: Arguments to pass to Sphinx.
     :param sphinxcontrib.versioning.lib.Config config: Runtime configuration.
-    :param str current_name: The ref name of the current version being built.
+    :param dict remote: The remote of the current version being built.
     :param multiprocessing.queues.Queue queue: Communication channel to parent process.
     """
     # Patch.
     EventHandlers.ABORT_AFTER_READ = queue
 
     # Run.
-    _build(argv, config, Versions(list()), current_name, False)
+    _build(argv, config, Versions(list()), remote, False)
 
 
-def build(source, target, versions, current_name, is_root):
+def build(source, target, versions, remote, is_root):
     """Build Sphinx docs for one version. Includes Versions class instance with names/urls in the HTML context.
 
     :raise HandledError: If sphinx-build fails. Will be logged before raising.
@@ -231,29 +231,29 @@ def build(source, target, versions, current_name, is_root):
     :param str source: Source directory to pass to sphinx-build.
     :param str target: Destination directory to write documentation to (passed to sphinx-build).
     :param sphinxcontrib.versioning.versions.Versions versions: Versions class instance.
-    :param str current_name: The ref name of the current version being built.
+    :param dict remote: The remote of the current version being built.
     :param bool is_root: Is this build in the web root?
     """
     log = logging.getLogger(__name__)
     argv = (source, target)
     config = Config.from_context()
 
-    log.debug('Running sphinx-build for %s with args: %s', current_name, str(argv))
-    child = multiprocessing.Process(target=_build, args=(argv, config, versions, current_name, is_root))
+    log.debug('Running sphinx-build for %s with args: %s', remote['name'], str(argv))
+    child = multiprocessing.Process(target=_build, args=(argv, config, versions, remote, is_root))
     child.start()
     child.join()  # Block.
     if child.exitcode != 0:
-        log.error('sphinx-build failed for branch/tag: %s', current_name)
+        log.error('sphinx-build failed for branch/tag: %s', remote['name'])
         raise HandledError
 
 
-def read_config(source, current_name):
+def read_config(source, remote):
     """Read the Sphinx config for one version.
 
     :raise HandledError: If sphinx-build fails. Will be logged before raising.
 
     :param str source: Source directory to pass to sphinx-build.
-    :param str current_name: The ref name of the current version being built.
+    :param dict remote: The remote of the current version being built.
 
     :return: Specific Sphinx config values.
     :rtype: dict
@@ -265,11 +265,11 @@ def read_config(source, current_name):
     with TempDir() as temp_dir:
         argv = (source, temp_dir)
         log.debug('Running sphinx-build for config values with args: %s', str(argv))
-        child = multiprocessing.Process(target=_read_config, args=(argv, config, current_name, queue))
+        child = multiprocessing.Process(target=_read_config, args=(argv, config, remote, queue))
         child.start()
         child.join()  # Block.
         if child.exitcode != 0:
-            log.error('sphinx-build failed for branch/tag while reading config: %s', current_name)
+            log.error('sphinx-build failed for branch/tag while reading config: %s', remote['name'])
             raise HandledError
 
     config = queue.get()
